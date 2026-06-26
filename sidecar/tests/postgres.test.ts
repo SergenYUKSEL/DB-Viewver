@@ -1,5 +1,11 @@
 import { expect, test, beforeAll } from "bun:test";
-import { connect, listNodes, attachColumns, buildForeignKeyEdges } from "../src/postgres";
+import {
+  connect,
+  listNodes,
+  attachColumns,
+  buildForeignKeyEdges,
+  attachRowCounts,
+} from "../src/postgres";
 import { seed, TEST_CONN } from "./helpers/testdb";
 
 beforeAll(async () => {
@@ -61,6 +67,22 @@ test("buildForeignKeyEdges returns FK edges and marks isFK", async () => {
     const orders = nodes.find((n) => n.name === "orders")!;
     const userId = orders.columns.find((c) => c.name === "user_id")!;
     expect(userId.isFK).toBe(true);
+  } finally {
+    await sql.end({ timeout: 5 });
+  }
+});
+
+test("attachRowCounts sets a non-negative estimate for tables", async () => {
+  const sql = connect(TEST_CONN);
+  try {
+    const nodes = await listNodes(sql);
+    await attachRowCounts(sql, nodes);
+    const users = nodes.find((n) => n.name === "users")!;
+    // seed.sql runs ANALYZE, so the estimate should be the 3 seeded rows.
+    expect(users.rowCount).toBe(3);
+
+    const view = nodes.find((n) => n.name === "active_users")!;
+    expect(view.rowCount).toBe(0);
   } finally {
     await sql.end({ timeout: 5 });
   }

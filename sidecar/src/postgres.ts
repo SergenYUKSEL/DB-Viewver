@@ -116,3 +116,18 @@ export async function buildForeignKeyEdges(sql: Sql, nodes: Node[]): Promise<Edg
 
   return edges;
 }
+
+export async function attachRowCounts(sql: Sql, nodes: Node[]): Promise<void> {
+  const rows = await sql<{ table_name: string; estimate: number }[]>`
+    SELECT c.relname AS table_name, c.reltuples::bigint AS estimate
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relkind IN ('r', 'p')
+  `;
+  const byName = new Map(rows.map((r) => [r.table_name, Number(r.estimate)]));
+  for (const node of nodes) {
+    const est = byName.get(node.name);
+    node.rowCount = est && est > 0 ? est : 0;
+  }
+}
