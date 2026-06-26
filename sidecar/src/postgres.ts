@@ -1,5 +1,5 @@
 import postgres, { type Sql } from "postgres";
-import type { Node, Column, Edge } from "./schema";
+import type { Node, Column, Edge, Graph } from "./schema";
 
 export function connect(connectionString: string): Sql {
   return postgres(connectionString);
@@ -61,16 +61,16 @@ export async function attachColumns(sql: Sql, nodes: Node[]): Promise<void> {
   }
 }
 
+interface FkRow {
+  constraint_name: string;
+  from_table: string;
+  from_column: string;
+  to_table: string;
+  to_column: string;
+}
+
 export async function buildForeignKeyEdges(sql: Sql, nodes: Node[]): Promise<Edge[]> {
-  const fks = await sql<
-    {
-      constraint_name: string;
-      from_table: string;
-      from_column: string;
-      to_table: string;
-      to_column: string;
-    }[]
-  >`
+  const fks = await sql<FkRow[]>`
     SELECT
       tc.constraint_name,
       tc.table_name  AS from_table,
@@ -89,7 +89,7 @@ export async function buildForeignKeyEdges(sql: Sql, nodes: Node[]): Promise<Edg
   `;
 
   // Group by constraint so we can skip composite (multi-column) FKs.
-  const byConstraint = new Map<string, typeof fks>();
+  const byConstraint = new Map<string, FkRow[]>();
   for (const fk of fks) {
     const list = byConstraint.get(fk.constraint_name) ?? [];
     list.push(fk);
@@ -159,4 +159,17 @@ export async function fetchRows(
   const rows = result.map((r) => columns.map((c) => (r as Record<string, unknown>)[c]));
 
   return { columns, rows, limit: safeLimit, offset: safeOffset };
+}
+
+export async function introspect(connectionString: string): Promise<Graph> {
+  const sql = connect(connectionString);
+  try {
+    const nodes = await listNodes(sql);
+    await attachColumns(sql, nodes);
+    await attachRowCounts(sql, nodes);
+    const edges = await buildForeignKeyEdges(sql, nodes);
+    return { nodes, edges };
+  } finally {
+    await sql.end({ timeout: 5 });
+  }
 }
