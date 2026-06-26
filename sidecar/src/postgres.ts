@@ -1,5 +1,5 @@
 import postgres, { type Sql } from "postgres";
-import type { Node, Column } from "./schema";
+import type { Node, Column, Edge } from "./schema";
 
 export function connect(connectionString: string): Sql {
   return postgres(connectionString);
@@ -59,4 +59,60 @@ export async function attachColumns(sql: Sql, nodes: Node[]): Promise<void> {
   for (const node of nodes) {
     node.columns = byTable.get(node.name) ?? [];
   }
+}
+
+export async function buildForeignKeyEdges(sql: Sql, nodes: Node[]): Promise<Edge[]> {
+  const fks = await sql<
+    {
+      constraint_name: string;
+      from_table: string;
+      from_column: string;
+      to_table: string;
+      to_column: string;
+    }[]
+  >`
+    SELECT
+      tc.constraint_name,
+      tc.table_name  AS from_table,
+      kcu.column_name AS from_column,
+      ccu.table_name AS to_table,
+      ccu.column_name AS to_column
+    FROM information_schema.table_constraints tc
+    JOIN information_schema.key_column_usage kcu
+      ON tc.constraint_name = kcu.constraint_name
+     AND tc.table_schema = kcu.table_schema
+    JOIN information_schema.constraint_column_usage ccu
+      ON ccu.constraint_name = tc.constraint_name
+     AND ccu.table_schema = tc.table_schema
+    WHERE tc.constraint_type = 'FOREIGN KEY'
+      AND tc.table_schema = 'public'
+  `;
+
+  // Group by constraint so we can skip composite (multi-column) FKs.
+  const byConstraint = new Map<string, typeof fks>();
+  for (const fk of fks) {
+    const list = byConstraint.get(fk.constraint_name) ?? [];
+    list.push(fk);
+    byConstraint.set(fk.constraint_name, list);
+  }
+
+  const columnByTable = new Map(nodes.map((n) => [n.name, n.columns]));
+  const edges: Edge[] = [];
+
+  for (const rows of byConstraint.values()) {
+    if (rows.length !== 1) continue; // MVP: single-column FKs only
+    const fk = rows[0];
+    edges.push({
+      from: `public.${fk.from_table}`,
+      to: `public.${fk.to_table}`,
+      fromColumns: [fk.from_column],
+      toColumns: [fk.to_column],
+      kind: "fk",
+      confidence: 1,
+    });
+    const col = columnByTable.get(fk.from_table)?.find((c) => c.name === fk.from_column);
+    if (col) col.isFK = true;
+  }
+
+  return edges;
 }

@@ -1,5 +1,5 @@
 import { expect, test, beforeAll } from "bun:test";
-import { connect, listNodes, attachColumns } from "../src/postgres";
+import { connect, listNodes, attachColumns, buildForeignKeyEdges } from "../src/postgres";
 import { seed, TEST_CONN } from "./helpers/testdb";
 
 beforeAll(async () => {
@@ -37,6 +37,30 @@ test("attachColumns fills columns with types, nullability and PK flags", async (
     expect(colByName["email"].nullable).toBe(false);
     expect(colByName["name"].nullable).toBe(true);
     expect(colByName["id"].type).toBe("integer");
+  } finally {
+    await sql.end({ timeout: 5 });
+  }
+});
+
+test("buildForeignKeyEdges returns FK edges and marks isFK", async () => {
+  const sql = connect(TEST_CONN);
+  try {
+    const nodes = await listNodes(sql);
+    await attachColumns(sql, nodes);
+    const edges = await buildForeignKeyEdges(sql, nodes);
+
+    expect(edges).toHaveLength(1);
+    const e = edges[0];
+    expect(e.from).toBe("public.orders");
+    expect(e.to).toBe("public.users");
+    expect(e.fromColumns).toEqual(["user_id"]);
+    expect(e.toColumns).toEqual(["id"]);
+    expect(e.kind).toBe("fk");
+    expect(e.confidence).toBe(1);
+
+    const orders = nodes.find((n) => n.name === "orders")!;
+    const userId = orders.columns.find((c) => c.name === "user_id")!;
+    expect(userId.isFK).toBe(true);
   } finally {
     await sql.end({ timeout: 5 });
   }
