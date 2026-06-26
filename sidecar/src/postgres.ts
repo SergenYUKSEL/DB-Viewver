@@ -131,3 +131,32 @@ export async function attachRowCounts(sql: Sql, nodes: Node[]): Promise<void> {
     node.rowCount = est && est > 0 ? est : 0;
   }
 }
+
+export interface Page {
+  columns: string[];
+  rows: unknown[][];
+  limit: number;
+  offset: number;
+}
+
+export async function fetchRows(
+  sql: Sql,
+  table: string,
+  limit = 50,
+  offset = 0,
+): Promise<Page> {
+  const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 500);
+  const safeOffset = Math.max(Math.trunc(offset), 0);
+
+  // Order by the first column for stable pagination.
+  const result = await sql`
+    SELECT * FROM ${sql(table)}
+    ORDER BY 1
+    LIMIT ${safeLimit} OFFSET ${safeOffset}
+  `;
+
+  const columns = result.columns.map((c) => c.name);
+  const rows = result.map((r) => columns.map((c) => (r as Record<string, unknown>)[c]));
+
+  return { columns, rows, limit: safeLimit, offset: safeOffset };
+}

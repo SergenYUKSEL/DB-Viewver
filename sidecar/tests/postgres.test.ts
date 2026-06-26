@@ -5,6 +5,7 @@ import {
   attachColumns,
   buildForeignKeyEdges,
   attachRowCounts,
+  fetchRows,
 } from "../src/postgres";
 import { seed, TEST_CONN } from "./helpers/testdb";
 
@@ -83,6 +84,27 @@ test("attachRowCounts sets a non-negative estimate for tables", async () => {
 
     const view = nodes.find((n) => n.name === "active_users")!;
     expect(view.rowCount).toBe(0);
+  } finally {
+    await sql.end({ timeout: 5 });
+  }
+});
+
+test("fetchRows returns a clamped, paged slice with column order", async () => {
+  const sql = connect(TEST_CONN);
+  try {
+    const page = await fetchRows(sql, "users", 2, 0);
+    expect(page.limit).toBe(2);
+    expect(page.offset).toBe(0);
+    expect(page.columns).toEqual(["id", "email", "name"]);
+    expect(page.rows).toHaveLength(2);
+    expect(page.rows[0][0]).toBe(1); // first user's id
+
+    const page2 = await fetchRows(sql, "users", 2, 2);
+    expect(page2.rows).toHaveLength(1); // only 3 users seeded
+
+    const clamped = await fetchRows(sql, "users", 9999, -5);
+    expect(clamped.limit).toBe(500);
+    expect(clamped.offset).toBe(0);
   } finally {
     await sql.end({ timeout: 5 });
   }
